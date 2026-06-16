@@ -94,25 +94,39 @@ def _assets_dir():
 def _glow_on_hover(widget, targets=None, bg_normal=None, bg_hover="#222222", is_btn=False):
     targets   = targets or [widget]
     bg_normal = bg_normal or widget.cget("fg_color")
+    # Track hover state to avoid redundant configure calls
+    state = {"hovered": False}
 
     if is_btn:
         def enter(e):
+            if state["hovered"]:
+                return
+            state["hovered"] = True
             try:
                 widget.configure(border_width=2, border_color=GLOW_CLR)
             except Exception:
                 pass
         def leave(e):
+            if not state["hovered"]:
+                return
+            state["hovered"] = False
             try:
                 widget.configure(border_width=0)
             except Exception:
                 pass
     else:
         def enter(e):
+            if state["hovered"]:
+                return
+            state["hovered"] = True
             try:
                 widget.configure(fg_color=bg_hover, border_width=2, border_color=GLOW_CLR)
             except Exception:
                 pass
         def leave(e):
+            if not state["hovered"]:
+                return
+            state["hovered"] = False
             try:
                 widget.configure(fg_color=bg_normal, border_width=0)
             except Exception:
@@ -139,13 +153,16 @@ class MoxiApp(ctk.CTk):
 
         self._logo_img       = None
         self._art_cache      = {}
+        self._art_photo_cache = {}
         self._art_load_queue = queue.Queue()
         self._art_loader_started = False
         self._art_loader_lock = threading.Lock()
+        self._art_thread_sem = threading.Semaphore(4)  # cap concurrent image fetches
         self._app_settings = self._load_app_settings()
         self._mod_icon_cache = {}
         self._mod_icon_loading = set()
         self._mod_icon_lock    = threading.Lock()
+        self._mod_icon_sem     = threading.Semaphore(6)  # cap concurrent icon fetches
         self._detected       = []
         self._detected_inner = None
         self._active_frame   = None
@@ -419,18 +436,19 @@ class MoxiApp(ctk.CTk):
 
         def _fetch_icon(expected=cache_key):
             img = None
-            try:
-                if source.startswith(("http://", "https://")):
-                    r = requests.get(source, timeout=8)
-                    r.raise_for_status()
-                    img = Image.open(io.BytesIO(r.content))
-                else:
-                    img = Image.open(source)
-                img = img.resize((size, size), Image.LANCZOS)
-            except Exception:
-                img = None
+            with self._mod_icon_sem:
+                try:
+                    if source.startswith(("http://", "https://")):
+                        r = requests.get(source, timeout=8)
+                        r.raise_for_status()
+                        img = Image.open(io.BytesIO(r.content))
+                    else:
+                        img = Image.open(source)
+                    img = img.resize((size, size), Image.LANCZOS)
+                except Exception:
+                    img = None
 
-            def _finish():
+            def _finish(img=img):
                 with self._mod_icon_lock:
                     self._mod_icon_loading.discard(expected)
 
@@ -1206,11 +1224,15 @@ class MoxiApp(ctk.CTk):
             label.after(0, _set_no_icon)
             return
         self._art_cache[cache_key] = img
-        photo = ImageTk.PhotoImage(img)
-        def apply():
+        # PhotoImage must be created on the main thread to avoid Tk threading issues
+        def apply(img=img, lbl=label, key=cache_key):
             try:
-                label.configure(image=photo, text="")
-                label.image = photo
+                photo = self._art_photo_cache.get(key)
+                if photo is None:
+                    photo = ImageTk.PhotoImage(img)
+                    self._art_photo_cache[key] = photo
+                lbl.configure(image=photo, text="")
+                lbl.image = photo
             except Exception:
                 pass
         try:
@@ -1232,11 +1254,10 @@ class MoxiApp(ctk.CTk):
         except Exception:
             pass
         if not self._is_staggered_loading_enabled():
-            threading.Thread(
-                target=self._load_art,
-                args=(appid, label, width, height),
-                daemon=True,
-            ).start()
+            def _throttled_load(appid=appid, label=label, width=width, height=height):
+                with self._art_thread_sem:
+                    self._load_art(appid, label, width, height)
+            threading.Thread(target=_throttled_load, daemon=True).start()
             return
         self._art_load_queue.put((appid, label, width, height, request_key))
 
@@ -3332,18 +3353,18 @@ class MoxiApp(ctk.CTk):
             text_color=TEXT_ON, anchor="w"
         ).pack(side="left", padx=16)
 
-        ctk.CTkLabel(
-            analytics_row, text=analytics_status_label(),
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=TEXT_DIM, anchor="e"
-        ).pack(side="right", padx=(0, 8))
-
         action_btn(
             analytics_row,
             "Disable" if self._stats._settings.get("consent") is True else "Enable",
             toggle_analytics_consent,
             danger=self._stats._settings.get("consent") is True,
         )
+
+        ctk.CTkLabel(
+            analytics_row, text=analytics_status_label(),
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=TEXT_DIM, anchor="e"
+        ).pack(side="right", padx=(0, 8))
 
         optimization_row = ctk.CTkFrame(data_sec, fg_color=CARD_BG, corner_radius=8, height=54)
         optimization_row.pack(fill="x", pady=(0, 6))
@@ -3355,13 +3376,6 @@ class MoxiApp(ctk.CTk):
             text_color=TEXT_ON, anchor="w"
         ).pack(side="left", padx=16)
 
-        ctk.CTkLabel(
-            optimization_row,
-            text="On" if self._is_staggered_loading_enabled() else "Off",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=TEXT_DIM, anchor="e"
-        ).pack(side="right", padx=(0, 8))
-
         def toggle_staggered_loading():
             self._set_staggered_loading_enabled(not self._is_staggered_loading_enabled())
             refresh_settings_page()
@@ -3372,6 +3386,13 @@ class MoxiApp(ctk.CTk):
             toggle_staggered_loading,
             danger=self._is_staggered_loading_enabled(),
         )
+
+        ctk.CTkLabel(
+            optimization_row,
+            text="On" if self._is_staggered_loading_enabled() else "Off",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=TEXT_DIM, anchor="e"
+        ).pack(side="right", padx=(0, 8))
 
         def clear_cache():
             import json
