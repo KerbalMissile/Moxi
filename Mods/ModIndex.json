@@ -1237,12 +1237,12 @@
           "name": "UEBridge (Dev Tool)",
           "author": "KerbalMissile",
           "source": "github",
-          "version": "1.0.0",
-          "description": "Exposes the names of certain things inside of the .pak's and .exe's, currently no information on them can be exposed as of v1.0.0 of UEBridge. More of a Dev Tool currently, the goal is to allow easier connections and use of certain elements in the game, but right now it just exposes things.",
+          "version": "2.0.0",
+          "description": "Exposes the names of certain things inside of the .pak's and .exe's, currently not much information on them can be exposed as of v2.0.0 of UEBridge. More of a Dev Tool currently, the goal is to allow easier connections and use of certain elements in the game, but right now it just exposes things.",
           "files": [
             {
               "url": "https://github.com/KerbalMissile/RRO-Mods-KM/raw/main/UEBridgeMod-v1.0.0.zip",
-              "filename": "UEBridgeMod-v1.0.0.zip",
+              "filename": "UEBridgeMod-v2.0.0.zip",
               "destination": "Mods",
               "extract": true,
               "include_prefix": "UEBridge"
