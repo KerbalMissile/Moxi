@@ -174,6 +174,25 @@ MODLOADER_CONFIGS = {
         "mod_dest":   "Mods",
         "subfolder":  "MelonLoader",
     },
+    "easy_delivery_co": {
+        "type":       "thunderstore_pkg",
+        "owner":      "BepInEx",
+        "name":       "BepInExPack",
+        "community":  "easy-delivery-co",
+        "version":    "5.4.2305",
+        "check_path": os.path.join("BepInEx", "core", "BepInEx.dll"),
+        "mod_dest":   os.path.join("BepInEx", "plugins"),
+        "subfolder":  "BepInExPack",
+    },
+    "lakehopper": {
+        "type":       "tbd",  # mod loader not yet released; placeholder until one exists
+        "owner":      None,
+        "name":       None,
+        "community":  None,
+        "check_path": None,
+        "mod_dest":   None,
+        "subfolder":  None,
+    },
 }
 
 THUNDERSTORE_CONFIGS = {
@@ -215,6 +234,10 @@ THUNDERSTORE_CONFIGS = {
     },
     "risk_of_rain_2": {
         "community": "riskofrain2",
+        "mod_dest":  os.path.join("BepInEx", "plugins"),
+    },
+    "easy_delivery_co": {
+        "community": "easy-delivery-co",
         "mod_dest":  os.path.join("BepInEx", "plugins"),
     },
 }
