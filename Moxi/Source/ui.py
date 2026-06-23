@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import io
+import hashlib
 import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageOps, ImageTk
@@ -12,9 +13,47 @@ from urllib.parse import urljoin
 
 from mod_manager import ModConflictError, ModManager, SteamScanner, THUNDERSTORE_CONFIGS
 from stats import StatsClient
+from discord_presence import DiscordPresenceClient
 
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Moxi")
 APP_SETTINGS_PATH = os.path.join(DATA_DIR, "app_settings.json")
+IMAGE_CACHE_DIR = os.path.join(DATA_DIR, "image_cache")
+ART_CACHE_DIR = os.path.join(IMAGE_CACHE_DIR, "art")
+MOD_ICON_CACHE_DIR = os.path.join(IMAGE_CACHE_DIR, "mod_icons")
+
+
+def _safe_cache_filename(*parts):
+    """Build a filesystem-safe cache filename from arbitrary cache-key parts."""
+    raw = "|".join(str(p) for p in parts)
+    digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+    return f"{digest}.png"
+
+
+def _read_image_from_disk(directory, filename):
+    path = os.path.join(directory, filename)
+    if not os.path.exists(path):
+        return None
+    try:
+        img = Image.open(path)
+        img.load()
+        return img
+    except Exception:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        return None
+
+
+def _write_image_to_disk(directory, filename, img):
+    try:
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, filename)
+        tmp_path = path + ".tmp"
+        img.save(tmp_path, format="PNG")
+        os.replace(tmp_path, path)
+    except Exception:
+        pass
 
 SUPPORTED_GAMES = {
     "1284190": {"name": "Planet Crafter",        "supported": True, "game_key": "planet_crafter"},
@@ -35,17 +74,20 @@ SUPPORTED_GAMES = {
     "1592190": {"name": "BONELAB",                "supported": True, "game_key": "bonelab"},
     "892970":  {"name": "Valheim",                 "supported": True, "game_key": "valheim"},
     "387990":  {"name": "Scrap Mechanic",          "supported": True, "game_key": "scrap_mechanic"},
+    "3293010": {"name": "Easy Delivery Co.",        "supported": True, "game_key": "easy_delivery_co"},
+    "4209010": {"name": "Lakehopper",               "supported": True, "game_key": "lakehopper"},
 }
 
 CUSTOM_ART_URLS = {
     "3527290": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3527290/31bac6b2eccf09b368f5e95ce510bae2baf3cfcd/header.jpg?t=1773856924",
+    "4209010": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/4209010/cf58e216cabb7764ac3563e5cb8a643c47c434dc/header.jpg?t=1774890036",
 }
 
 CURATED_MODS_REPO_URL = "https://github.com/KerbalMissile/MoxiDefaultMods"
 
-THUNDERSTORE_GAMES = {"dyson_sphere", "muck", "risk_of_rain_2", "boneworks", "peak", "schedule_i", "bonelab", "supermarket_together", "valheim", "scrap_mechanic"}
+THUNDERSTORE_GAMES = {"dyson_sphere", "muck", "risk_of_rain_2", "boneworks", "peak", "schedule_i", "bonelab", "supermarket_together", "valheim", "scrap_mechanic", "easy_delivery_co"}
 
-NEWLY_ADDED = {"subnautica_2"}
+NEWLY_ADDED = {"subnautica_2", "easy_delivery_co", "lakehopper"}
 
 THUNDERSTORE_BLOCKLIST = {
     "schedule_i":    {"LavaGang-MelonLoader", "ebkr-r2modman", "Kesomannen-GaleModManager"},
@@ -58,13 +100,14 @@ THUNDERSTORE_BLOCKLIST = {
     "supermarket_together": {"BepInEx-BepInExPack", "ebkr-r2modman", "Kesomannen-GaleModManager"},
     "valheim":       {"denikson-BepInExPack_Valheim", "ebkr-r2modman", "Kesomannen-GaleModManager"},
     "scrap_mechanic": {"ebkr-r2modman", "Kesomannen-GaleModManager"},
+    "easy_delivery_co": {"BepInEx-BepInExPack", "ebkr-r2modman", "Kesomannen-GaleModManager"},
 }
 
 GAME_KEY_TO_NAME    = {v["game_key"]: v["name"] for v in SUPPORTED_GAMES.values()}
 GAME_NAMES          = [v["name"] for v in SUPPORTED_GAMES.values() if v["supported"]]
 GAME_NAMES_ALL      = [v["name"] for v in SUPPORTED_GAMES.values()]
 
-MOXI_VERSION = "2.6.1"
+MOXI_VERSION = "2.7.0"
 MOXI_REPO    = "KerbalMissile/Moxi"
 
 BG       = "#111111"
@@ -94,39 +137,25 @@ def _assets_dir():
 def _glow_on_hover(widget, targets=None, bg_normal=None, bg_hover="#222222", is_btn=False):
     targets   = targets or [widget]
     bg_normal = bg_normal or widget.cget("fg_color")
-    # Track hover state to avoid redundant configure calls
-    state = {"hovered": False}
 
     if is_btn:
         def enter(e):
-            if state["hovered"]:
-                return
-            state["hovered"] = True
             try:
                 widget.configure(border_width=2, border_color=GLOW_CLR)
             except Exception:
                 pass
         def leave(e):
-            if not state["hovered"]:
-                return
-            state["hovered"] = False
             try:
                 widget.configure(border_width=0)
             except Exception:
                 pass
     else:
         def enter(e):
-            if state["hovered"]:
-                return
-            state["hovered"] = True
             try:
                 widget.configure(fg_color=bg_hover, border_width=2, border_color=GLOW_CLR)
             except Exception:
                 pass
         def leave(e):
-            if not state["hovered"]:
-                return
-            state["hovered"] = False
             try:
                 widget.configure(fg_color=bg_normal, border_width=0)
             except Exception:
@@ -144,7 +173,7 @@ class MoxiApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("")
+        self.title("Moxi Mod Manager")
         self.geometry("1200x750")
         self.minsize(950, 620)
         self.configure(fg_color=BG)
@@ -153,16 +182,13 @@ class MoxiApp(ctk.CTk):
 
         self._logo_img       = None
         self._art_cache      = {}
-        self._art_photo_cache = {}
         self._art_load_queue = queue.Queue()
         self._art_loader_started = False
         self._art_loader_lock = threading.Lock()
-        self._art_thread_sem = threading.Semaphore(4)  # cap concurrent image fetches
         self._app_settings = self._load_app_settings()
         self._mod_icon_cache = {}
         self._mod_icon_loading = set()
         self._mod_icon_lock    = threading.Lock()
-        self._mod_icon_sem     = threading.Semaphore(6)  # cap concurrent icon fetches
         self._detected       = []
         self._detected_inner = None
         self._active_frame   = None
@@ -185,6 +211,7 @@ class MoxiApp(ctk.CTk):
         self._dismissed_warnings  = self._mod_manager.load_dismissed_warnings()
         self._stats = StatsClient(MOXI_VERSION)
         self._stats_consent_required = not self._stats.has_consent_decision()
+        self._discord_presence = DiscordPresenceClient()
 
         self._load_logo()
         self._ensure_art_loader()
@@ -194,6 +221,7 @@ class MoxiApp(ctk.CTk):
         self._show_page("stats_consent" if self._stats_consent_required else "dashboard")
         if not self._stats_consent_required:
             self._stats.track_app_started()
+        self._discord_presence.set_browsing()
 
         threading.Thread(target=self._scan_steam, daemon=True).start()
         threading.Thread(target=self._do_fetch_index, daemon=True).start()
@@ -435,8 +463,11 @@ class MoxiApp(ctk.CTk):
             self._mod_icon_loading.add(cache_key)
 
         def _fetch_icon(expected=cache_key):
-            img = None
-            with self._mod_icon_sem:
+            cache_filename = _safe_cache_filename("mod_icon", source, size)
+            img = _read_image_from_disk(MOD_ICON_CACHE_DIR, cache_filename)
+            if img is not None:
+                img = img.convert("RGBA")
+            else:
                 try:
                     if source.startswith(("http://", "https://")):
                         r = requests.get(source, timeout=8)
@@ -445,10 +476,11 @@ class MoxiApp(ctk.CTk):
                     else:
                         img = Image.open(source)
                     img = img.resize((size, size), Image.LANCZOS)
+                    _write_image_to_disk(MOD_ICON_CACHE_DIR, cache_filename, img)
                 except Exception:
                     img = None
 
-            def _finish(img=img):
+            def _finish():
                 with self._mod_icon_lock:
                     self._mod_icon_loading.discard(expected)
 
@@ -770,6 +802,9 @@ class MoxiApp(ctk.CTk):
             "stats_consent": self._build_stats_consent,
         }[key](frame)
 
+        if key != "stats_consent":
+            self._discord_presence.set_browsing()
+
         # Scroll all CTkScrollableFrames on this page back to the top
         def _scroll_to_top():
             try:
@@ -791,6 +826,10 @@ class MoxiApp(ctk.CTk):
     def _on_app_close(self):
         try:
             self._stats.close_session()
+        except Exception:
+            pass
+        try:
+            self._discord_presence.close()
         except Exception:
             pass
         self.destroy()
@@ -1224,15 +1263,11 @@ class MoxiApp(ctk.CTk):
             label.after(0, _set_no_icon)
             return
         self._art_cache[cache_key] = img
-        # PhotoImage must be created on the main thread to avoid Tk threading issues
-        def apply(img=img, lbl=label, key=cache_key):
+        photo = ImageTk.PhotoImage(img)
+        def apply():
             try:
-                photo = self._art_photo_cache.get(key)
-                if photo is None:
-                    photo = ImageTk.PhotoImage(img)
-                    self._art_photo_cache[key] = photo
-                lbl.configure(image=photo, text="")
-                lbl.image = photo
+                label.configure(image=photo, text="")
+                label.image = photo
             except Exception:
                 pass
         try:
@@ -1254,10 +1289,11 @@ class MoxiApp(ctk.CTk):
         except Exception:
             pass
         if not self._is_staggered_loading_enabled():
-            def _throttled_load(appid=appid, label=label, width=width, height=height):
-                with self._art_thread_sem:
-                    self._load_art(appid, label, width, height)
-            threading.Thread(target=_throttled_load, daemon=True).start()
+            threading.Thread(
+                target=self._load_art,
+                args=(appid, label, width, height),
+                daemon=True,
+            ).start()
             return
         self._art_load_queue.put((appid, label, width, height, request_key))
 
@@ -1272,6 +1308,11 @@ class MoxiApp(ctk.CTk):
             self._load_art(appid, label, width, height)
 
     def _fetch_cdn_art(self, appid, width=ART_W, height=ART_H):
+        cache_filename = _safe_cache_filename("art", appid, width, height)
+        cached = _read_image_from_disk(ART_CACHE_DIR, cache_filename)
+        if cached is not None:
+            return cached.convert("RGBA")
+
         url = CUSTOM_ART_URLS.get(str(appid)) or f"https://steamcdn-a.akamaihd.net/steam/apps/{appid}/header.jpg"
         try:
             r = requests.get(url, timeout=6)
@@ -1282,6 +1323,7 @@ class MoxiApp(ctk.CTk):
                 x = (width - fitted.width) // 2
                 y = (height - fitted.height) // 2
                 canvas.paste(fitted, (x, y))
+                _write_image_to_disk(ART_CACHE_DIR, cache_filename, canvas)
                 return canvas
         except Exception:
             pass
@@ -1461,6 +1503,13 @@ class MoxiApp(ctk.CTk):
         self._active_frame = frame
 
         self._build_game_mod_view(frame, game)
+        self._update_discord_presence_for_game(game_key, game.get("name", ""))
+
+    def _update_discord_presence_for_game(self, game_key, game_name):
+        installed = self._mod_manager.installed.get(game_key, {})
+        installed_count = len(installed)
+        enabled_count = sum(1 for entry in installed.values() if entry.get("enabled", True))
+        self._discord_presence.set_game(game_name, installed_count, enabled_count)
 
     def _build_game_mod_view(self, parent, game):
         """Per-game view with the mod list."""
@@ -1498,32 +1547,12 @@ class MoxiApp(ctk.CTk):
         """The original mod list UI, adapted to sit inside the per-game view."""
         PAGE_SIZE = 20
         game_key  = game["game_key"]
-        modpacks_enabled = False
-        modpack_state = {
-            "packs": [],
-            "active_pack_id": None,
-            "refresh_mods": lambda: None,
-            "refresh_modpacks": lambda: None,
-            "switch_tab": lambda tab: None,
-        }
-
-        def _refresh_shared_modpacks():
-            return []
-
-        def _get_active_pack():
-            return None
-
-        def _pack_mod_ids(pack=None):
-            return set()
 
         def _installed_entry(mod_id):
             return self._mod_manager.installed.get(game_key, {}).get(mod_id)
 
         def _is_visible_installed(mod_id):
             return _installed_entry(mod_id) is not None
-
-        def _refresh_pack_controls():
-            return
 
         state = {
             "page": 0, "all_mods": [], "filtered_mods": None, "game_key": game_key,
@@ -1928,8 +1957,6 @@ class MoxiApp(ctk.CTk):
             installed   = _is_visible_installed(mod["id"])
             mod_enabled = [entry.get("enabled", True) if entry and installed else True]
             has_update  = mod["id"] in state["updates_available"]
-            active_pack = _get_active_pack()
-            in_active_pack = active_pack is not None and mod["id"] in _pack_mod_ids(active_pack)
             slot["config_btn"].pack_forget()
             slot["support_btn"].pack_forget()
             slot["icon_wrap"].pack_forget()
@@ -1983,58 +2010,38 @@ class MoxiApp(ctk.CTk):
                 slot["support_btn"].configure(command=lambda url=support_url: webbrowser.open(url))
                 slot["support_btn"].pack(side="left", padx=(0, 6), before=slot["action_btn"])
 
-            if active_pack:
-                if has_update and installed:
+            if installed:
+                if has_update:
                     slot["inst_lbl"].configure(text="Update Available", text_color="#ffaa00")
-                elif in_active_pack:
-                    lbl_text = f"In {active_pack.get('name', 'Active Pack')}"
-                    lbl_color = "#44cc88" if mod_enabled[0] else "#ffaa00"
-                    if not mod_enabled[0]:
-                        lbl_text += " (disabled)"
-                    slot["inst_lbl"].configure(text=lbl_text, text_color=lbl_color)
                 else:
-                    slot["inst_lbl"].configure(text="Not in active pack", text_color=TEXT_DIM)
+                    slot["inst_lbl"].configure(text="Installed", text_color="#44cc88")
                 slot["action_btn"].configure(
-                    text="Remove" if in_active_pack else "Add to Pack",
-                    fg_color="#2a2a2a" if in_active_pack else ACCENT,
-                    hover_color="#3a1a1a" if in_active_pack else "#cc0040",
-                    text_color="#cc4444" if in_active_pack else "#ffffff",
-                    state="normal"
+                    text="Remove", fg_color="#2a2a2a",
+                    hover_color="#3a1a1a", text_color="#cc4444", state="normal"
+                )
+                game_data = self._detected_map.get(gk)
+                install_dir = game_data["install_dir"] if game_data else None
+                config_path = None
+                if install_dir and os.path.isdir(install_dir):
+                    cached_path = state["config_paths"].get(mod["id"])
+                    if cached_path and os.path.exists(cached_path):
+                        config_path = cached_path
+                    else:
+                        config_path = self._mod_manager.get_mod_config_path(gk, mod["id"], install_dir)
+                        state["config_paths"][mod["id"]] = config_path
+                if config_path:
+                    slot["config_btn"].configure(command=lambda m=mod, p=config_path: _load_config_into_panel(m, p))
+                    slot["config_btn"].pack(side="left", padx=(0, 6))
+                _draw_toggle(slot["toggle_canvas"], mod_enabled[0])
+                slot["toggle_canvas"].configure(cursor="hand2")
+                slot["toggle_canvas"].pack(side="left", padx=(0, 6), before=slot["action_btn"])
+            else:
+                slot["inst_lbl"].configure(text="Not Installed", text_color=TEXT_DIM)
+                slot["action_btn"].configure(
+                    text="Install", fg_color=ACCENT,
+                    hover_color="#cc0040", text_color="#ffffff", state="normal"
                 )
                 slot["toggle_canvas"].pack_forget()
-            else:
-                if installed:
-                    if has_update:
-                        slot["inst_lbl"].configure(text="Update Available", text_color="#ffaa00")
-                    else:
-                        slot["inst_lbl"].configure(text="Installed", text_color="#44cc88")
-                    slot["action_btn"].configure(
-                        text="Remove", fg_color="#2a2a2a",
-                        hover_color="#3a1a1a", text_color="#cc4444", state="normal"
-                    )
-                    game_data = self._detected_map.get(gk)
-                    install_dir = game_data["install_dir"] if game_data else None
-                    config_path = None
-                    if install_dir and os.path.isdir(install_dir):
-                        cached_path = state["config_paths"].get(mod["id"])
-                        if cached_path and os.path.exists(cached_path):
-                            config_path = cached_path
-                        else:
-                            config_path = self._mod_manager.get_mod_config_path(gk, mod["id"], install_dir)
-                            state["config_paths"][mod["id"]] = config_path
-                    if config_path:
-                        slot["config_btn"].configure(command=lambda m=mod, p=config_path: _load_config_into_panel(m, p))
-                        slot["config_btn"].pack(side="left", padx=(0, 6))
-                    _draw_toggle(slot["toggle_canvas"], mod_enabled[0])
-                    slot["toggle_canvas"].configure(cursor="hand2")
-                    slot["toggle_canvas"].pack(side="left", padx=(0, 6), before=slot["action_btn"])
-                else:
-                    slot["inst_lbl"].configure(text="Not Installed", text_color=TEXT_DIM)
-                    slot["action_btn"].configure(
-                        text="Install", fg_color=ACCENT,
-                        hover_color="#cc0040", text_color="#ffffff", state="normal"
-                    )
-                    slot["toggle_canvas"].pack_forget()
 
             slot["update_btn"].pack_forget()
             if installed and has_update:
@@ -2043,42 +2050,35 @@ class MoxiApp(ctk.CTk):
                     command=lambda s=slot, gk2=gk: _do_update(s, gk2))
 
             slot["toggle_canvas"].unbind("<Button-1>")
-            if installed and not active_pack:
+            if installed:
                 def _on_toggle(e=None, s=slot, gk2=gk, me=mod_enabled):
                     if not self._mod_manager.is_installed(gk2, s["mod"][0]["id"]):
                         return
                     new_state = not me[0]
                     me[0] = new_state
                     _draw_toggle(s["toggle_canvas"], new_state)
+                    mod_id = s["mod"][0]["id"]
+
+                    def _after_toggle():
+                        self._update_discord_presence_for_game(gk2, game["name"])
+
                     if new_state:
-                        threading.Thread(target=lambda: self._mod_manager.enable_mod(gk2, s["mod"][0]["id"]), daemon=True).start()
+                        def _enable():
+                            self._mod_manager.enable_mod(gk2, mod_id)
+                            s["toggle_canvas"].after(0, _after_toggle)
+                        threading.Thread(target=_enable, daemon=True).start()
                     else:
-                        threading.Thread(target=lambda: self._mod_manager.disable_mod(gk2, s["mod"][0]["id"]), daemon=True).start()
+                        def _disable():
+                            self._mod_manager.disable_mod(gk2, mod_id)
+                            s["toggle_canvas"].after(0, _after_toggle)
+                        threading.Thread(target=_disable, daemon=True).start()
                 slot["toggle_canvas"].bind("<Button-1>", _on_toggle)
 
             def _do_remove(s=slot, gk2=gk):
-                if _get_active_pack():
-                    mod_id = s["mod"][0]["id"]
-                    active_pack = _get_active_pack()
-                    _remove_mod_from_active_pack(mod_id)
-                    if not _mod_in_other_pack(mod_id, exclude_pack_id=active_pack.get("id") if active_pack else None):
-                        try:
-                            self._mod_manager.uninstall_mod(gk2, mod_id)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            _set_installed_owner(mod_id, _other_pack_owner(mod_id, exclude_pack_id=active_pack.get("id") if active_pack else None))
-                            self._mod_manager.disable_mod(gk2, mod_id)
-                        except Exception:
-                            pass
-                    if not _mod_in_other_pack(mod_id, exclude_pack_id=active_pack.get("id") if active_pack else None):
-                        self._stats.track_mod_deleted(gk2, 1)
-                    _go_page(state["page"])
-                    return
                 try:
                     self._mod_manager.uninstall_mod(gk2, s["mod"][0]["id"])
                     self._stats.track_mod_deleted(gk2, 1)
+                    self._update_discord_presence_for_game(gk2, game["name"])
                     s["inst_lbl"].configure(text="Not Installed", text_color=TEXT_DIM)
                     s["action_btn"].configure(
                         text="Install", fg_color=ACCENT,
@@ -2088,30 +2088,6 @@ class MoxiApp(ctk.CTk):
                     s["toggle_canvas"].pack_forget()
                 except Exception:
                     s["inst_lbl"].configure(text="Remove failed", text_color="#cc4444")
-
-            def _finalize_pack_membership(installed_mods, gk2):
-                active_pack_now = _get_active_pack()
-                if not active_pack_now:
-                    return
-                for installed_mod in installed_mods:
-                    _add_mod_to_active_pack(installed_mod)
-                    try:
-                        _set_installed_owner(installed_mod["id"], active_pack_now["id"])
-                        self._mod_manager.enable_mod(gk2, installed_mod["id"])
-                    except Exception:
-                        pass
-
-            def _add_existing_to_pack(s=slot, gk2=gk):
-                _add_mod_to_active_pack(s["mod"][0])
-                try:
-                    if self._mod_manager.is_installed(gk2, s["mod"][0]["id"]):
-                        active_pack = _get_active_pack()
-                        if active_pack:
-                            _set_installed_owner(s["mod"][0]["id"], active_pack["id"])
-                        self._mod_manager.enable_mod(gk2, s["mod"][0]["id"])
-                except Exception:
-                    pass
-                _go_page(state["page"])
 
             def _do_install(s=slot, gk2=gk, install_modloader_first=False, confirmed_deps=None):
                 game_data   = self._detected_map.get(gk2)
@@ -2183,7 +2159,6 @@ class MoxiApp(ctk.CTk):
                             s["action_btn"].after(0, lambda: s["action_btn"].configure(state="normal", text="Retry", command=lambda: _do_install(s, gk2)))
                             return
 
-                    _finalize_pack_membership(installed_now, gk2)
                     installed_count = sum(
                         1 for mid in planned_ids
                         if mid not in before_ids and self._mod_manager.is_installed(gk2, mid)
@@ -2191,6 +2166,7 @@ class MoxiApp(ctk.CTk):
                     self._stats.track_mod_install(gk2, installed_count)
 
                     def on_done():
+                        self._update_discord_presence_for_game(gk2, game["name"])
                         _go_page(state["page"])
 
                     s["action_btn"].after(0, on_done)
@@ -2236,9 +2212,7 @@ class MoxiApp(ctk.CTk):
                     command=lambda: [_dismiss_notif(), _do_install(s, gk2, confirmed_deps=deps)]
                 ).pack(side="right", padx=(0, 4))
 
-            if active_pack and not in_active_pack and installed:
-                slot["action_btn"].configure(command=lambda s=slot, gk2=game_key: _add_existing_to_pack(s, gk2))
-            elif installed:
+            if installed:
                 slot["action_btn"].configure(command=lambda s=slot, gk2=game_key: _do_remove(s, gk2))
             else:
                 slot["action_btn"].configure(command=lambda s=slot, gk2=game_key: _do_install(s, gk2))
@@ -2287,10 +2261,7 @@ class MoxiApp(ctk.CTk):
             _render_page(sliced, gk)
 
         def _refresh_mods_view():
-            _refresh_pack_controls()
             _go_page(state["page"])
-
-        modpack_state["refresh_mods"] = _refresh_mods_view
 
         def _do_search(*_):
             if state["suppress_search"]:
@@ -2635,7 +2606,6 @@ class MoxiApp(ctk.CTk):
             for _s in state["row_pool"]:
                 _s["frame"].pack_forget()
             _hide_message()
-            _refresh_pack_controls()
 
             if not supported:
                 status_lbl.configure(text="")
@@ -3221,6 +3191,8 @@ class MoxiApp(ctk.CTk):
             text_color=TEXT_ON, anchor="w"
         ).pack(side="left", padx=16)
 
+        check_btn = action_btn(version_row, "Check for Updates", lambda: None)
+
         update_lbl = ctk.CTkLabel(
             version_row, text="",
             font=ctk.CTkFont(family="Segoe UI", size=11),
@@ -3260,7 +3232,7 @@ class MoxiApp(ctk.CTk):
                 daemon=True
             ).start()
 
-        check_btn = action_btn(version_row, "Check for Updates", check_updates)
+        check_btn.configure(command=check_updates)
 
         # --- Game Paths ---
         paths_sec = section("Game Install Paths")
