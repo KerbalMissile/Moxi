@@ -38,7 +38,7 @@ Moxi detects your Steam games automatically, pulls mods from a curated index, ha
 | Out of Ore | Supported |
 | Railroads ONLINE | Supported |
 | Easy Delivery Co. | Supported |
-| Lakehopper | Supported - No Mods / Mod Loaders Exist Yet | 
+| Lakehopper | Supported - No Mods / Mod Loaders Released Yet | 
 
 ---
 
