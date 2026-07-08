@@ -68,7 +68,7 @@ Download the latest installer from the [releases page](https://github.com/Kerbal
 
 ---
 
-**Incompatibilies:**
+**Incompatibilities:**
 - Norton (Norton CyberCapture causes crashes)
 
 ---
