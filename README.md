@@ -48,13 +48,13 @@ Moxi detects your Steam games automatically, pulls mods from a curated index, ha
 
 **Mod loader management** - If BepInEx, SRML, or MelonLoader is not installed for a game, Moxi will offer to install it before installing any mods.
 
-**Dependency resolution** - If a mod requires another mod, Moxi detects this automatically and asks you to confirm before installing the full chain.
+**Dependency resolution** - If a mod requires a dependency, Moxi detects this automatically and asks you to confirm before installing the full chain of mods and dependencies.
 
 **Enable and disable mods** - Toggle mods on or off without uninstalling them. Disabled mods are renamed in place and ignored by the game until re-enabled.
 
 **Recently played** - Games you launch from Moxi are tracked so your most-used games are always one click away.
 
-**Automatic update checks** - Moxi checks for new versions on startup and notifies you when one is available.
+**Automatic update checks** - Moxi checks for new versions on startup and notifies you when an update is available.
 
 ---
 
