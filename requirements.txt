@@ -1,0 +1,5 @@
+customtkinter
+pillow
+requests
+pypresence
+packaging
