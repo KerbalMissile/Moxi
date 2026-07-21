@@ -1,0 +1,56 @@
+name: Python Code Validation
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  validate:
+    name: Validate Python Code (${{ matrix.os }} - Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter pillow requests pypresence packaging flake8
+
+      - name: Check Python Syntax (py_compile)
+        run: |
+          python -m py_compile Moxi/Source/*.py
+
+      - name: Lint for critical errors (flake8)
+        run: |
+          flake8 Moxi/Source --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Test Module Imports (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run python -c "import sys; sys.path.insert(0, 'Moxi/Source'); import mod_manager, stats, discord_presence, ui"
+
+      - name: Test Module Imports (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -c "import sys; sys.path.insert(0, 'Moxi/Source'); import mod_manager, stats, discord_presence, ui"

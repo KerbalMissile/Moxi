@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import io
 import json
@@ -10,7 +11,19 @@ import requests
 from urllib.parse import urljoin
 
 
-DATA_DIR      = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Moxi")
+def _get_data_dir():
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "")
+        if not base:
+            base = os.path.expanduser("~\\AppData\\Local")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    return os.path.join(base, "Moxi")
+
+
+DATA_DIR      = _get_data_dir()
 INSTALLED_DB  = os.path.join(DATA_DIR, "installed.json")
 MODLOADER_STATE_DB = os.path.join(DATA_DIR, "modloaders.json")
 DEBUG_LOG_PATH = os.path.join(DATA_DIR, "mod_manager_debug.log")
@@ -1248,15 +1261,26 @@ class ModManager:
         assets    = data.get("assets", [])
         dl_url    = None
         for asset in assets:
-            if asset["name"].startswith("Moxi-v") and asset["name"].endswith("-Installer.exe"):
-                dl_url = asset["browser_download_url"]
-                break
+            name = asset["name"]
+            if sys.platform == "win32":
+                if name.startswith("Moxi-v") and name.endswith("-Installer.exe"):
+                    dl_url = asset["browser_download_url"]
+                    break
+            else:
+                if name.endswith(".AppImage") or name.endswith(".tar.gz") or name.endswith(".zip"):
+                    dl_url = asset["browser_download_url"]
+                    break
+        if not dl_url and assets:
+            dl_url = assets[0]["browser_download_url"]
         return tag, changelog, dl_url
 
     def download_installer(self, dl_url, version, progress_cb=None):
         updates_dir = os.path.join(DATA_DIR, "updates")
         os.makedirs(updates_dir, exist_ok=True)
-        dest = os.path.join(updates_dir, f"Moxi-v{version}-Installer.exe")
+        ext = os.path.splitext(dl_url)[1] if dl_url else ".bin"
+        if sys.platform == "win32" and not ext:
+            ext = ".exe"
+        dest = os.path.join(updates_dir, f"Moxi-v{version}{ext}")
 
         r     = requests.get(dl_url, stream=True, timeout=120)
         r.raise_for_status()
@@ -1922,6 +1946,8 @@ class SteamScanner:
         return candidates
 
     def _steam_root_from_registry(self):
+        if sys.platform != "win32":
+            return None
         try:
             import winreg
             key  = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam")
@@ -1944,28 +1970,77 @@ class SteamScanner:
         return None
 
     def _steam_root_fallback(self):
-        for p in [
-            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Steam"),
-            os.path.join(os.environ.get("PROGRAMFILES", ""), "Steam"),
-        ]:
-            if os.path.isdir(p):
-                return p
+        if sys.platform == "win32":
+            for p in [
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Steam"),
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Steam"),
+            ]:
+                if os.path.isdir(p):
+                    return p
+        else:
+            home = os.path.expanduser("~")
+            for p in [
+                os.path.join(home, ".local", "share", "Steam"),
+                os.path.join(home, ".steam", "steam"),
+                os.path.join(home, ".steam", "root"),
+                os.path.join(home, ".var", "app", "com.valvesoftware.Steam", "data", "Steam"),
+                os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+                os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
+            ]:
+                if os.path.isdir(p):
+                    return p
         return None
 
     def _brute_force_scan(self):
         candidates = []
-        for letter in string.ascii_uppercase:
-            drive = f"{letter}:\\"
-            if not os.path.exists(drive):
-                continue
-            for fragment in [
-                os.path.join(drive, "Program Files (x86)", "Steam", "steamapps"),
-                os.path.join(drive, "Program Files", "Steam", "steamapps"),
-                os.path.join(drive, "Steam", "steamapps"),
-                os.path.join(drive, "SteamLibrary", "steamapps"),
+        if sys.platform == "win32":
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if not os.path.exists(drive):
+                    continue
+                for fragment in [
+                    os.path.join(drive, "Program Files (x86)", "Steam", "steamapps"),
+                    os.path.join(drive, "Program Files", "Steam", "steamapps"),
+                    os.path.join(drive, "Steam", "steamapps"),
+                    os.path.join(drive, "SteamLibrary", "steamapps"),
+                ]:
+                    if os.path.isdir(fragment) and fragment not in candidates:
+                        candidates.append(fragment)
+        else:
+            home = os.path.expanduser("~")
+            for base in [
+                os.path.join(home, ".local", "share", "Steam"),
+                os.path.join(home, ".steam", "steam"),
+                os.path.join(home, ".steam", "root"),
+                os.path.join(home, ".var", "app", "com.valvesoftware.Steam", "data", "Steam"),
+                os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+                os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
             ]:
-                if os.path.isdir(fragment) and fragment not in candidates:
-                    candidates.append(fragment)
+                sa = os.path.join(base, "steamapps")
+                if os.path.isdir(sa) and sa not in candidates:
+                    candidates.append(sa)
+
+            for mount_root in ["/media", "/mnt"]:
+                if os.path.isdir(mount_root):
+                    try:
+                        for user_or_drive in os.listdir(mount_root):
+                            path1 = os.path.join(mount_root, user_or_drive)
+                            if os.path.isdir(path1):
+                                subdirs = [path1]
+                                try:
+                                    for sub in os.listdir(path1):
+                                        path2 = os.path.join(path1, sub)
+                                        if os.path.isdir(path2):
+                                            subdirs.append(path2)
+                                except Exception:
+                                    pass
+                                for d in subdirs:
+                                    for frag in ["steamapps", "SteamLibrary/steamapps", "Steam/steamapps"]:
+                                        sa = os.path.join(d, frag)
+                                        if os.path.isdir(sa) and sa not in candidates:
+                                            candidates.append(sa)
+                    except Exception:
+                        pass
         return candidates
 
     def _parse_libraryfolders(self, vdf_path):
@@ -1974,7 +2049,7 @@ class SteamScanner:
             with open(vdf_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             for m in re.findall(r'"path"\s+"([^"]+)"', content):
-                p = m.replace("\\\\", "\\")
+                p = m.replace("\\\\", "/") if sys.platform != "win32" else m.replace("\\\\", "\\")
                 if os.path.isdir(p):
                     paths.append(p)
         except Exception:
