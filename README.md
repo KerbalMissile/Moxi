@@ -6,6 +6,9 @@ A lightweight mod manager for PC games, currently on Steam games are supported. 
 
 Moxi detects your Steam games automatically, pulls mods from a curated index, handles dependencies, and installs everything in the right place. If a game needs a mod loader like BepInEx, Moxi installs that too.
 
+> [!NOTE]
+> Development is paused and will resume August 2nd.
+
 ---
 
 ## Links
