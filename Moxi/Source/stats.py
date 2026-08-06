@@ -12,7 +12,19 @@ from datetime import datetime, timezone
 import requests
 
 
-DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Moxi")
+def _get_data_dir():
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "")
+        if not base:
+            base = os.path.expanduser("~\\AppData\\Local")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    return os.path.join(base, "Moxi")
+
+
+DATA_DIR = _get_data_dir()
 SETTINGS_PATH = os.path.join(DATA_DIR, "stats_settings.json")
 DEBUG_LOG_PATH = os.path.join(DATA_DIR, "stats_debug.log")
 DEFAULT_APTABASE_APP_KEY = "A-US-3827570468"

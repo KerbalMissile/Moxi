@@ -15,7 +15,32 @@ from mod_manager import ModConflictError, ModManager, SteamScanner, THUNDERSTORE
 from stats import StatsClient
 from discord_presence import DiscordPresenceClient
 
-DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Moxi")
+
+def _get_data_dir():
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA", "")
+        if not base:
+            base = os.path.expanduser("~\\AppData\\Local")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    return os.path.join(base, "Moxi")
+
+
+def open_path(path):
+    """Open a file or directory using the OS default application."""
+    if hasattr(os, "startfile"):
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        import subprocess
+        subprocess.run(["open", path])
+    else:
+        import subprocess
+        subprocess.run(["xdg-open", path])
+
+
+DATA_DIR = _get_data_dir()
 APP_SETTINGS_PATH = os.path.join(DATA_DIR, "app_settings.json")
 IMAGE_CACHE_DIR = os.path.join(DATA_DIR, "image_cache")
 ART_CACHE_DIR = os.path.join(IMAGE_CACHE_DIR, "art")
@@ -511,14 +536,25 @@ class MoxiApp(ctk.CTk):
             path = os.path.join(assets, name)
             if os.path.exists(path):
                 try:
-                    img = Image.open(path).resize((30, 30), Image.LANCZOS)
-                    self._logo_img = ImageTk.PhotoImage(img)
+                    img = Image.open(path)
+                    self._logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(30, 30))
                 except Exception:
                     pass
                 break
 
     def _set_window_icon(self):
         assets = _assets_dir()
+        if sys.platform != "win32":
+            png_path = os.path.join(assets, "MoxiLogo.png")
+            if os.path.exists(png_path):
+                try:
+                    from PIL import ImageTk, Image
+                    img = ImageTk.PhotoImage(Image.open(png_path))
+                    self.iconphoto(True, img)
+                    self._icon_img = img
+                    return
+                except Exception:
+                    pass
         for name in ("MoxiLogo.ico", "logo.ico", "blank.ico"):
             path = os.path.join(assets, name)
             if os.path.exists(path):
@@ -1213,7 +1249,7 @@ class MoxiApp(ctk.CTk):
                 corner_radius=4,
                 border_width=0,
                 width=90, height=24,
-                command=lambda path=install_dir: os.startfile(path)
+                command=lambda path=install_dir: open_path(path)
             )
             open_folder_btn.pack(side="right", anchor="center", padx=(0, 6))
             _glow_on_hover(open_folder_btn, targets=[open_folder_btn], is_btn=True)
@@ -1598,7 +1634,7 @@ class MoxiApp(ctk.CTk):
                 fg_color="#1e1e1e", hover_color="#2a2a2a",
                 text_color=TEXT_DIM, corner_radius=6,
                 border_width=0, width=130, height=30,
-                command=lambda path=mods_folder_path: os.startfile(path)
+                command=lambda path=mods_folder_path: open_path(path)
             )
             open_mods_folder_btn.pack(side="right", padx=(0, 8), pady=8)
             _glow_on_hover(open_mods_folder_btn, targets=[open_mods_folder_btn], is_btn=True)
@@ -2393,18 +2429,12 @@ class MoxiApp(ctk.CTk):
                     msg = str(exc)
                     def on_fail():
                         slot["inst_lbl"].configure(text=msg, text_color="#ccaa44")
-                        slot["action_btn"].configure(state="normal", text="Remove",
-                            command=lambda: _do_remove(slot, gk2))
-                        if "update_btn" in slot:
-                            slot["update_btn"].configure(state="normal")
+                        _bind_row(slot, mod, gk2)
                     slot["action_btn"].after(0, on_fail)
                 except Exception:
                     def on_fail():
                         slot["inst_lbl"].configure(text="Update failed", text_color="#cc4444")
-                        slot["action_btn"].configure(state="normal", text="Remove",
-                            command=lambda: _do_remove(slot, gk2))
-                        if "update_btn" in slot:
-                            slot["update_btn"].configure(state="normal")
+                        _bind_row(slot, mod, gk2)
                     slot["action_btn"].after(0, on_fail)
 
             threading.Thread(target=_run, daemon=True).start()
@@ -2573,10 +2603,10 @@ class MoxiApp(ctk.CTk):
                         _load_mods_data()
                     toolbar.after(0, _on_done)
                 except ModConflictError as exc:
-                    def _on_conflict():
+                    def _on_conflict(msg=str(exc)):
                         import_file_btn.configure(state="normal")
                         import_folder_btn.configure(state="normal")
-                        status_lbl.configure(text=str(exc), text_color="#ccaa44")
+                        status_lbl.configure(text=msg, text_color="#ccaa44")
                     toolbar.after(0, _on_conflict)
                 except Exception as exc:
                     def _on_fail(msg=str(exc)):
@@ -3292,7 +3322,7 @@ class MoxiApp(ctk.CTk):
         def open_data_folder():
             path = DATA_DIR
             os.makedirs(path, exist_ok=True)
-            os.startfile(path)
+            open_path(path)
 
         row(data_sec, "Open Moxi data folder", lambda p: action_btn(p, "Open Folder", open_data_folder))
 
